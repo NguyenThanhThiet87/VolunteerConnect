@@ -1,16 +1,16 @@
-name: CI/CD Pipeline
+name: CI Pipeline
 
 on:
   push:
     branches:
       - main
-      - chore/setup-docker-deployment
-      - feat/frontend-deployment
-      - fix/*
-      - feature/api-sync-and-security-fix
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  test-python-code:
+  test-backend:
+    name: Test Backend (Python & Pytest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,104 +41,25 @@ jobs:
       - name: Run Pytest
         run: pytest
 
-  build-and-push:
-    needs: test-python-code
+  build-frontend:
+    name: Build Frontend (Vite & TypeScript)
     runs-on: ubuntu-latest
-    # BẮT BUỘC để WIF có thể tạo token OIDC
-    permissions:
-      contents: 'read'
-      id-token: 'write'
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud (Workload Identity Federation)
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: 'projects/33207334612/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-          service_account: 'github-ci-sa@volunteer-connect-prod-999.iam.gserviceaccount.com'
-
-      - name: Configure Docker to use Artifact Registry
-        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: |
-            asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-api:${{ github.sha }}
-            asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and Push Docker Image (Frontend)
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          tags: |
-            asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-frontend:${{ github.sha }}
-            asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-frontend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy-to-cloudrun:
-    needs: build-and-push # Đợi job Build xong mới được Deploy
-    runs-on: ubuntu-latest
-    # BẮT BUỘC để WIF có thể tạo token OIDC
-    permissions:
-      contents: 'read'
-      id-token: 'write'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 22 (LTS)
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Authenticate to Google Cloud (Workload Identity Federation)
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: 'projects/33207334612/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-          service_account: 'github-ci-sa@volunteer-connect-prod-999.iam.gserviceaccount.com'
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Deploy Infrastructure with SST (GitOps)
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # Tắt telemetry và kiểm tra update của SST/Pulumi để tránh bị treo trên GitHub Actions Runner
-          SST_TELEMETRY_DISABLED: 1
-          PULUMI_SKIP_UPDATE_CHECK: "true"
-          # Gắn mã Băm (SHA) của lần Commit này vào đường link Docker
-          IMAGE_URL: "asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-api:${{ github.sha }}"
-          FRONTEND_IMAGE_URL: "asia-southeast1-docker.pkg.dev/volunteer-connect-prod-999/volunteer-connect-repo/volunteer-connect-frontend:${{ github.sha }}"
-          # Truyền tiếp các biến SMTP từ GitHub Secrets
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
-        # Chạy unlock trước để bẻ khóa nếu có lỗi, sau đó deploy bình thường (bật verbose để hiển thị log chi tiết)
-        run: |
-          npx sst unlock --stage dev || true
-          npx sst refresh --stage dev || true
-          npx sst deploy --stage dev --verbose
-
-      - name: Print Pulumi logs on console
-        if: always()
-        run: cat .sst/log/pulumi.log || true
-
-      - name: Upload SST logs as Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sst-logs
-          path: .sst/log/
+      - name: Build Frontend
+        run: npm run build
