@@ -5,6 +5,7 @@ from email.mime.image import MIMEImage
 import asyncio
 import logging
 import os
+import httpx
 from app.core.config.settings import settings
 
 logger = logging.getLogger("email")
@@ -14,14 +15,54 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(base_dir, "..", "..", "..", ".."))
 LOGO_PATH = os.path.join(project_root, "frontend", "src", "assets", "logo-removebg-preview.png")
 
-def _send_email_sync(email_to: str, subject: str, html_content: str) -> bool:
+async def _send_via_brevo(email_to: str, subject: str, html_content: str) -> bool:
     """
-    Hàm đồng bộ kết nối SMTP Server gửi email.
+    Gửi email qua Brevo REST API v3 (Sử dụng cổng HTTPS 443 - không bị Render/Cloud chặn).
+    """
+    if not settings.BREVO_API_KEY or not settings.BREVO_SENDER_EMAIL:
+        return False
+
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "api-key": settings.BREVO_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "sender": {
+            "name": settings.BREVO_SENDER_NAME or "VolunteerConnect",
+            "email": settings.BREVO_SENDER_EMAIL,
+        },
+        "to": [
+            {
+                "email": email_to
+            }
+        ],
+        "subject": subject,
+        "htmlContent": html_content,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code in (200, 201):
+                res_data = response.json()
+                logger.info(f"✅ Đã gửi email Brevo tới {email_to} (MessageId: {res_data.get('messageId')})")
+                return True
+            else:
+                logger.error(f"❌ Lỗi gửi email qua Brevo API ({response.status_code}): {response.text}")
+                return False
+    except Exception as e:
+        logger.error(f"❌ Ngoại lệ khi kết nối Brevo API: {e}")
+        return False
+
+def _send_email_smtp_sync(email_to: str, subject: str, html_content: str) -> bool:
+    """
+    Hàm đồng bộ kết nối SMTP Server gửi email (Fallback khi không cấu hình Brevo).
     Được chạy trên thread riêng bằng asyncio.to_thread để tránh blocking.
     """
-    # Nếu không cấu hình SMTP credentials, báo lỗi và trả về False để kích hoạt fallback
     if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
-        logger.warning("SMTP credentials are not configured. Email will not be sent.")
+        logger.warning("SMTP credentials are not configured.")
         return False
 
     try:
@@ -55,11 +96,28 @@ def _send_email_sync(email_to: str, subject: str, html_content: str) -> bool:
                 message["To"],
                 message.as_string()
             )
-        logger.info(f"✅ Đã gửi email OTP tới {email_to}")
+        logger.info(f"✅ Đã gửi email qua SMTP tới {email_to}")
         return True
     except Exception as e:
         logger.error(f"❌ Lỗi gửi email qua SMTP: {e}")
         return False
+
+async def _send_email(email_to: str, subject: str, html_content: str) -> bool:
+    """
+    Hàm điều phối gửi email:
+    1. Ưu tiên gửi qua Brevo REST API (HTTPS port 443).
+    2. Fallback sang SMTP nếu Brevo không có cấu hình hoặc gửi lỗi.
+    """
+    if settings.BREVO_API_KEY and settings.BREVO_SENDER_EMAIL:
+        success = await _send_via_brevo(email_to, subject, html_content)
+        if success:
+            return True
+        logger.warning("Gửi email qua Brevo thất bại, đang thử fallback...")
+
+    if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
+        return await asyncio.to_thread(_send_email_smtp_sync, email_to, subject, html_content)
+
+    return False
 
 async def send_otp_email(email_to: str, otp_code: str) -> bool:
     """
@@ -138,7 +196,7 @@ async def send_otp_email(email_to: str, otp_code: str) -> bool:
     </html>
     """
     
-    success = await asyncio.to_thread(_send_email_sync, email_to, subject, html_content)
+    success = await _send_email(email_to, subject, html_content)
     if not success:
         # Fallback: In mã OTP ra terminal của dev để có thể copy đăng nhập nhanh offline
         print("\n" + "="*80)
@@ -224,7 +282,7 @@ async def send_reset_password_email(email_to: str, otp_code: str) -> bool:
     </html>
     """
     
-    success = await asyncio.to_thread(_send_email_sync, email_to, subject, html_content)
+    success = await _send_email(email_to, subject, html_content)
     if not success:
         # Fallback: In mã OTP ra terminal bằng ký tự không dấu tránh lỗi encoding trên Windows
         print("\n" + "="*80)

@@ -19,7 +19,12 @@ class Settings(BaseSettings):
         return self.MONGODB_URL
 
 
-    # Cấu hình dịch vụ gửi Email (SMTP)
+    # Cấu hình dịch vụ gửi Email (Brevo REST API v3)
+    BREVO_API_KEY: Optional[str] = None
+    BREVO_SENDER_EMAIL: Optional[str] = None
+    BREVO_SENDER_NAME: str = "VolunteerConnect"
+
+    # Cấu hình dịch vụ gửi Email dự phòng (SMTP)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USERNAME: Optional[str] = None
