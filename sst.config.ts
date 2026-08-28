@@ -55,7 +55,11 @@ export default $config({
               { name: "JWT_SECRET", value: "your_jwt_secret" },
               // Cấu hình Google Cloud Storage
               { name: "GCS_BUCKET_NAME", value: process.env.GCS_BUCKET_NAME || "volunteer-connect-media-dev" },
-              // Cấu hình SMTP Email OTP đọc từ môi trường khi deploy
+              // Cấu hình Brevo Email REST API
+              { name: "BREVO_API_KEY", value: process.env.BREVO_API_KEY || "" },
+              { name: "BREVO_SENDER_EMAIL", value: process.env.BREVO_SENDER_EMAIL || "" },
+              { name: "BREVO_SENDER_NAME", value: process.env.BREVO_SENDER_NAME || "VolunteerConnect" },
+              // Cấu hình SMTP Email OTP đọc từ môi trường khi deploy (Dự phòng)
               { name: "SMTP_HOST", value: process.env.SMTP_HOST || "smtp.gmail.com" },
               { name: "SMTP_PORT", value: process.env.SMTP_PORT || "587" },
               { name: "SMTP_USERNAME", value: process.env.SMTP_USERNAME || "" },
